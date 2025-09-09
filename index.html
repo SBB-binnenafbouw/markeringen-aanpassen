@@ -2,39 +2,64 @@
 <html lang="nl">
 <head>
   <meta charset="utf-8" />
-  <title>BAX Scale & Rotate (client-side) - versie 1.3</title>
+  <title>BAX Scale & Rotate (client-side)</title>
   <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- libs -->
   <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
   <style>
-    :root { --bg:#0b0c0f; --card:#16181d; --fg:#e6e7eb; --muted:#9aa1aa; --acc:#74c0fc; }
-    body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial}
+    :root{
+      --brand:#7C1829; --text:#212121; --bg:#FFFFFF; --gray1:#A9A9A9; --gray2:#F9F9F9;
+      --card:#F9F9F9; --border:#A9A9A9; --muted:#6b6b6b;
+    }
+    *{box-sizing:border-box}
+    body{margin:0;background:var(--bg);color:var(--text);
+      font:15px/1.5 "Helvetica Neue", Helvetica, "Helvetica Condensed",
+           Arial, "Arial Narrow", system-ui, -apple-system, sans-serif;}
     .wrap{max-width:920px;margin:40px auto;padding:0 16px}
-    .card{background:var(--card);border:1px solid #22262e;border-radius:14px;padding:18px}
-    h1{margin:0 0 12px;font-size:20px}
+    .card{background:var(--card);border:1px solid var(--border);border-radius:14px;padding:18px}
+    h1{margin:0 0 12px;font-size:22px;letter-spacing:.2px}
     label{display:block;margin:10px 0 6px;color:var(--muted)}
-    input[type="number"],select{width:100%;padding:10px;border-radius:10px;border:1px solid #2a2f37;background:#0f1116;color:var(--fg)}
+    input[type="number"],select{
+      width:100%;padding:10px 12px;border-radius:10px;border:1px solid var(--border);background:#fff;color:var(--text);outline:none;
+    }
+    input[type="number"]:focus,select:focus{border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb, var(--brand) 20%, transparent)}
     .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
-    .btn{display:inline-block;background:var(--acc);color:#0a0a0a;border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
-    .btn[disabled]{opacity:.5;cursor:not-allowed}
+    /* From→To rij: links select, midden pijl, rechts select */
+    .row.fromto{grid-template-columns:1fr auto 1fr;align-items:end}
+    .arrow{padding:0 6px;user-select:none}
+    .btn{display:inline-block;background:var(--brand);color:#fff;border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer}
+    .btn:hover{filter:brightness(1.05)}
+    .btn[disabled]{opacity:.6;cursor:not-allowed}
     .muted{color:var(--muted);font-size:13px}
-    .drop{border:2px dashed #2a2f37;border-radius:14px;padding:22px;text-align:center;background:#0f1116}
+    .drop{border:2px dashed var(--border);border-radius:14px;padding:22px;text-align:center;background:#fff;color:var(--text)}
+    .drop strong{color:var(--brand)}
     .sp{height:8px}
-    .ok{color:#7cf48d}.err{color:#ff6b6b}
+    .ok{color:#2e7d32}.err{color:#c62828}
+    /* file chips */
+    .filelist{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+    .chip{display:flex;align-items:center;gap:8px;background:#fff;border:1px solid var(--border);border-radius:999px;padding:6px 10px;max-width:100%}
+    .chip-name{max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .chip-x{width:22px;height:22px;display:grid;place-items:center;border-radius:999px;border:1px solid var(--border);cursor:pointer;background:var(--gray2)}
+    .chip-x:hover{background:#fff;border-color:var(--brand);color:var(--brand)}
   </style>
 </head>
 <body>
   <div class="wrap">
     <div class="card">
-      <h1>BAX Scale & Rotate (client-side) - versie 1.3</h1>
+      <h1>Bluebeam markeringen - shcalen & roteren (versie 2.0)</h1>
+
       <div class="drop" id="drop">
-        <div><strong>Sleep je .bax hierheen</strong> of klik om te kiezen</div>
+        <div><strong>Sleep .bax-bestanden hierheen</strong> of klik om te kiezen</div>
         <div class="muted">Alles gebeurt lokaal in je browser</div>
-        <input type="file" id="file" accept=".bax" style="display:none">
+        <input type="file" id="file" accept=".bax" multiple style="display:none">
       </div>
+      <div id="fileList" class="filelist"></div>
 
       <div class="sp"></div>
 
-      <div class="row">
+      <!-- schaalkeuze -->
+      <div class="row" id="rowMode">
         <div>
           <label>Schaal (kies 1 van 2)</label>
           <select id="scaleMode">
@@ -46,13 +71,18 @@
           <label>Percentage</label>
           <input type="number" id="pct" step="0.1" value="200" min="0.1">
         </div>
-        <div id="fromBox" style="display:none">
-          <label>Van (bijv. 100 voor 1:100)</label>
-          <input type="number" id="fromScale" step="0.1" value="100" min="0.1">
+      </div>
+
+      <!-- van → naar -->
+      <div class="row fromto" id="rowFromTo" style="display:none">
+        <div id="fromBox">
+          <label>Van (bijv. 1:100)</label>
+          <select id="fromSel"></select>
         </div>
-        <div id="toBox" style="display:none">
-          <label>Naar (bijv. 50 voor 1:50)</label>
-          <input type="number" id="toScale" step="0.1" value="50" min="0.01">
+        <div class="arrow" aria-hidden="true">→</div>
+        <div id="toBox">
+          <label>Naar (bijv. 1:50)</label>
+          <select id="toSel"></select>
         </div>
       </div>
 
@@ -74,69 +104,125 @@
 
       <div class="sp"></div>
 
-      <label><input type="checkbox" id="fixDims" checked> Lengtemetingen forceren (Rotation buiten Raw aanpassen)</label>
-      <div class="muted">Aan laten als lengte/afstand niet mee draait.</div>
-
-      <div class="sp"></div>
-
-      <button class="btn" id="runBtn" disabled>Verwerk & download .bax</button>
+      <button class="btn" id="runBtn" disabled>Verwerk & download</button>
       <span id="status" class="muted"></span>
     </div>
   </div>
 
 <script>
 const $ = s => document.querySelector(s);
-const drop = $('#drop'), file = $('#file'), runBtn = $('#runBtn'), statusEl = $('#status');
-let fileText = null, fileName = null;
+const drop = $('#drop'), file = $('#file'), runBtn = $('#runBtn'), statusEl = $('#status'), listEl = $('#fileList');
+let queue = []; // {name, text}
+const SCALE_OPTS = ["1:50","1:100","1:1","1:2","1:5","1:10","1:20","1:25","1:200","1:500","1:1000","1:2000"];
+
+document.addEventListener('DOMContentLoaded', () => {
+  // vul from/to selects
+  const fromSel = $('#fromSel'), toSel = $('#toSel');
+  for (const s of SCALE_OPTS){
+    const o1 = document.createElement('option'); o1.value = s; o1.textContent = s; fromSel.appendChild(o1.cloneNode(true));
+    const o2 = document.createElement('option'); o2.value = s; o2.textContent = s; toSel.appendChild(o2);
+  }
+  // defaults 1:100 -> 1:50
+  fromSel.value = "1:100"; toSel.value = "1:50";
+});
 
 drop.addEventListener('click', () => file.click());
-drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.background='#0b1017'; });
-drop.addEventListener('dragleave', () => drop.style.background='#0f1116');
-drop.addEventListener('drop', e => { e.preventDefault(); drop.style.background='#0f1116'; if (e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]); });
-file.addEventListener('change', e => { if (file.files[0]) handleFile(file.files[0]); });
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.borderColor='var(--brand)'; });
+drop.addEventListener('dragleave', () => { drop.style.borderColor='var(--border)'; });
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.style.borderColor='var(--border)';
+  if (e.dataTransfer.files?.length) addFiles(e.dataTransfer.files);
+});
+file.addEventListener('change', e => { if (file.files?.length) addFiles(file.files); });
 
-function handleFile(f){
-  const reader = new FileReader();
-  reader.onload = () => { fileText = reader.result; fileName = f.name.replace(/\.bax$/i,'') || 'annotations'; runBtn.disabled = false; status('Bestand geladen.','ok'); };
-  reader.onerror = () => status('Lezen mislukt.','err');
-  reader.readAsText(f);
+function addFiles(fileList){
+  const tasks = [];
+  for (const f of fileList){
+    if (!/\.bax$/i.test(f.name)) continue;
+    tasks.push(readFileAsText(f).then(text => { queue.push({name: f.name, text}); }));
+  }
+  Promise.all(tasks).then(()=>{ refreshList(); });
 }
+function readFileAsText(f){
+  return new Promise((res, rej) => {
+    const r = new FileReader();
+    r.onload = () => res(r.result);
+    r.onerror = () => rej(new Error('Lezen mislukt: '+f.name));
+    r.readAsText(f);
+  });
+}
+function plural(n){ return n===1 ? 'bestand' : 'bestanden'; }
+function refreshList(){
+  listEl.innerHTML = '';
+  queue.forEach((item, idx) => {
+    const chip = document.createElement('div'); chip.className='chip';
+    const name = document.createElement('div'); name.className='chip-name'; name.textContent=item.name;
+    const x = document.createElement('button'); x.className='chip-x'; x.type='button'; x.innerHTML='&times;';
+    x.onclick = () => { queue.splice(idx,1); refreshList(); };
+    chip.appendChild(name); chip.appendChild(x);
+    listEl.appendChild(chip);
+  });
+  runBtn.disabled = queue.length === 0;
+  status(`${queue.length} ${plural(queue.length)} geladen.`,'ok');
+  if (queue.length===0) status('Geen bestanden geladen.');
+}
+function status(msg, cls){ statusEl.textContent = msg; statusEl.className = cls||'muted'; }
 
 $('#scaleMode').addEventListener('change', e => {
   const m = e.target.value;
-  $('#pctBox').style.display = m==='pct'?'block':'none';
-  $('#fromBox').style.display = m==='fromto'?'block':'none';
-  $('#toBox').style.display = m==='fromto'?'block':'none';
+  $('#pctBox').style.display   = m==='pct'    ? 'block' : 'none';
+  $('#rowFromTo').style.display= m==='fromto' ? 'grid'  : 'none';
 });
 
-runBtn.addEventListener('click', () => {
+runBtn.addEventListener('click', async () => {
   try{
+    if (queue.length===0) return;
     const s = computeScale();
     const dIn = parseFloat($('#deg').value||'0');
     const dir = $('#dir').value;
     const deg = dir==='cw' ? -dIn : dIn;
-    const fixDims = $('#fixDims').checked;
-    status('Bezig met verwerken…');
-    const out = transformBax(fileText, s, deg, fixDims);
-    download(out, `${fileName}_scaled_rotated.bax`);
-    status('Klaar. Bestand gedownload.','ok');
-  }catch(err){ console.error(err); status('Fout: '+(err?.message||err),'err'); }
+    const fixDims = true; // altijd aan
+
+    status('Verwerken…');
+
+    if (queue.length === 1){
+      const item = queue[0];
+      const out = transformBax(item.text, s, deg, fixDims);
+      const outName = item.name.replace(/\.bax$/i,'') + '_scaled_rotated.bax';
+      download(out, outName);
+    } else {
+      const zip = new JSZip();
+      for (const item of queue){
+        const out = transformBax(item.text, s, deg, fixDims);
+        const outName = item.name.replace(/\.bax$/i,'') + '_scaled_rotated.bax';
+        zip.file(outName, out);
+      }
+      const blob = await zip.generateAsync({type:'blob'});
+      downloadBlob(blob, 'bax_scaled_rotated.zip');
+    }
+    status('Klaar. Download gestart.','ok');
+  }catch(err){
+    console.error(err);
+    status('Fout: ' + (err?.message||err),'err');
+  }
 });
 
 function computeScale(){
   const mode = $('#scaleMode').value;
   if (mode==='pct'){
-    const pct = parseFloat($('#pct').value||'100'); if (!isFinite(pct)||pct<=0) throw new Error('Ongeldig percentage'); return pct/100;
+    const pct = parseFloat($('#pct').value||'100');
+    if (!isFinite(pct)||pct<=0) throw new Error('Ongeldig percentage');
+    return pct/100;
   } else {
-    const from = parseFloat($('#fromScale').value||'100'), to = parseFloat($('#toScale').value||'50');
-    if (!isFinite(from)||!isFinite(to)||from<=0||to<=0) throw new Error('Ongeldige schaalwaarden');
-    return from/to;
+    const from = $('#fromSel').value; const to = $('#toSel').value;
+    const f = parseFloat(from.split(':')[1]); const t = parseFloat(to.split(':')[1]);
+    if (!isFinite(f)||!isFinite(t)||f<=0||t<=0) throw new Error('Ongeldige schaalwaarden');
+    return f/t; // bv 100/50 = 2
   }
 }
-
-function status(msg, cls){ statusEl.textContent = msg; statusEl.className = cls||'muted'; }
 function fmt(n){ return parseFloat(n.toFixed(4)).toString(); }
 
+/* ===== hieronder: verwerkingscode (zoals eerder, incl. vormen/metingen/appearance) ===== */
 function transformPairs(txt, scale, ca, sa){
   const nums = txt.match(/-?\d+(?:\.\d+)?/g); if (!nums||nums.length<2||nums.length%2) return txt;
   const out=[]; for (let i=0;i<nums.length;i+=2){ const x = parseFloat(nums[i])*scale, y = parseFloat(nums[i+1])*scale; const xr = x*ca - y*sa, yr = x*sa + y*ca; out.push(fmt(xr), fmt(yr)); }
@@ -149,41 +235,33 @@ function transformRect(txt, scale, ca, sa){
   return [fmt(Math.min(x1r,x2r)), fmt(Math.min(y1r,y2r)), fmt(Math.max(x1r,x2r)), fmt(Math.max(y1r,y2r))].join(' ');
 }
 function transformLine(txt, scale, ca, sa){
-  // /L [x1 y1 x2 y2] — behoud puntvolgorde
   const n = txt.match(/-?\d+(?:\.\d+)?/g); if (!n||n.length<4) return txt;
   let x1=parseFloat(n[0])*scale, y1=parseFloat(n[1])*scale, x2=parseFloat(n[2])*scale, y2=parseFloat(n[3])*scale;
   const x1r=x1*ca - y1*sa, y1r=x1*sa + y1*ca, x2r=x2*ca - y2*sa, y2r=x2*sa + y2*ca;
   return [fmt(x1r),fmt(y1r),fmt(x2r),fmt(y2r)].join(' ');
 }
 function transformInkList(txt, scale, ca, sa){
-  // /InkList [ [x y ...] [x y ...] ... ]
   return txt.replace(/\[([^\]]+)\]/g, (m, inner) => {
     const nums = inner.match(/-?\d+(?:\.\d+)?/g); if (!nums||nums.length<2||nums.length%2) return m;
     const out=[]; for (let i=0;i<nums.length;i+=2){ const x=parseFloat(nums[i])*scale, y=parseFloat(nums[i+1])*scale; const xr=x*ca - y*sa, yr=x*sa + y*ca; out.push(fmt(xr),fmt(yr)); }
     return `[${out.join(' ')}]`;
   });
 }
-
 function scalePtInStyle(s, scale){ return s.replace(/(\d+(?:\.\d+)?)pt\b/g, (_,n)=> `${fmt(parseFloat(n)*scale)}pt`); }
-
 function scaleLineWidthOps(s, scale){
-  // PDF content stream: "N w" (set line width)
   s = s.replace(/(\d+(?:\.\d+)?)\s+w\b/g, (_,n)=> `${fmt(parseFloat(n)*scale)} w`);
-  // Font size: "/Fname N Tf"
   s = s.replace(/\/[A-Za-z0-9]+\s+(\d+(?:\.\d+)?)\s+Tf\b/g, (m,n)=> m.replace(n, fmt(parseFloat(n)*scale)));
-  // Border style dict: /BS<<... /W n ...>>
-  s = s.replace(/\/BS\s*<<([^>]*)>>/g, (m,inner)=>{
-    const inner2 = inner.replace(/\/W\s+(\d+(?:\.\d+)?)/, (mm, n)=> `/W ${fmt(parseFloat(n)*scale)}`);
-    return `/BS<<${inner2}>>`;
-  });
-  // /LW n
+  s = s.replace(/\/BS\s*<<([^>]*)>>/g, (m,inner)=>{ const inner2 = inner.replace(/\/W\s+(\d+(?:\.\d+)?)/, (mm, n)=> `/W ${fmt(parseFloat(n)*scale)}`); return `/BS<<${inner2}>>`; });
   s = s.replace(/\/LW\s+(\d+(?:\.\d+)?)/g, (m,n)=> `/LW ${fmt(parseFloat(n)*scale)}`);
-  // /Border [h v w]  -> schaal derde waarde (w)
-  s = s.replace(/\/Border\s*\[\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*\]/g,
-    (m,a,b,w)=> `/Border [${a} ${b} ${fmt(parseFloat(w)*scale)}]`);
+  s = s.replace(/\/Border\s*\[\s*(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s+(\d+(?:\.\d+)?)\s*\]/g, (m,a,b,w)=> `/Border [${a} ${b} ${fmt(parseFloat(w)*scale)}]`);
   return s;
 }
-
+function composeRSWithMatrix(a,b,c,d,e,f, scale, deg){
+  const rad = deg * Math.PI/180, ca = Math.cos(rad), sa = Math.sin(rad);
+  const ta = scale*ca, tb = scale*sa, tc = -scale*sa, td = scale*ca, te = 0, tf = 0;
+  const a2 = ta*a + tc*b, b2 = tb*a + td*b, c2 = ta*c + tc*d, d2 = tb*c + td*d, e2 = ta*e + tc*f + te, f2 = tb*e + td*f + tf;
+  return [a2,b2,c2,d2,e2,f2].map(n => fmt(n));
+}
 function decodeRaw(payload){
   const raw = payload.trim();
   const isHex = /^[0-9a-fA-F\s]+$/.test(raw);
@@ -192,64 +270,48 @@ function decodeRaw(payload){
   try{ return pako.inflate(b,{to:'string'}); }catch{ return new TextDecoder('latin1').decode(b); }
 }
 function encodeRaw(plain){ const comp = pako.deflate(plain); return bytesToHex(comp); }
-
 function transformRaw(plain, scale, deg){
   const rad = deg * Math.PI/180, ca = Math.cos(rad), sa = Math.sin(rad);
   let t = plain;
-
-  // 1) schaal fonts/line in stijl + content operators
   t = scalePtInStyle(t, scale);
   t = scaleLineWidthOps(t, scale);
-
-  // 2) geometrie
   t = t.replace(/\/Rect\s*\[([^\]]+)\]/g, (_,g)=> `/Rect [${transformRect(g, scale, ca, sa)}]`);
   t = t.replace(/\/Vertices\s*\[([^\]]+)\]/g, (_,g)=> `/Vertices [${transformPairs(g, scale, ca, sa)}]`);
   t = t.replace(/\/QuadPoints\s*\[([^\]]+)\]/g, (_,g)=> `/QuadPoints [${transformPairs(g, scale, ca, sa)}]`);
   t = t.replace(/\/BBox\s*\[([^\]]+)\]/g, (_,g)=> `/BBox [${transformRect(g, scale, ca, sa)}]`);
-  t = t.replace(/\/L\s*\[([^\]]+)\]/g, (_,g)=> `/L [${transformLine(g, scale, ca, sa)}]`);   // <<< lengte meting
+  t = t.replace(/\/L\s*\[([^\]]+)\]/g,     (_,g)=> `/L [${transformLine(g, scale, ca, sa)}]`);
   t = t.replace(/\/InkList\s*\[(.*?)\]/gs, (_,g)=> `/InkList [${transformInkList(g, scale, ca, sa)}]`);
-
+  t = t.replace(/(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+(-?\d+(?:\.\d+)?)\s+cm/g,
+    (_,a,b,c,d,e,f) => { const [A,B,C,D,E,F] = composeRSWithMatrix(parseFloat(a),parseFloat(b),parseFloat(c),parseFloat(d),parseFloat(e),parseFloat(f), scale, deg); return `${A} ${B} ${C} ${D} ${E} ${F} cm`; });
+  t = t.replace(/\/Matrix\s*\[\s*([^\]]+)\s*\]/g,
+    (m, inner) => { const nums = (inner.match(/-?\d+(?:\.\d+)?/g)||[]).map(parseFloat); if (nums.length !== 6) return m;
+      const [A,B,C,D,E,F] = composeRSWithMatrix(nums[0],nums[1],nums[2],nums[3],nums[4],nums[5], scale, deg);
+      return `/Matrix [${A} ${B} ${C} ${D} ${E} ${F}]`; });
   return t;
 }
-
 function applyXmlTweaks(xml, scale, deg){
-  // Rotation/Rotate buiten Raw (helpt bij sommige meettypes)
   if (deg && Math.abs(deg)>0.0001){
-    xml = xml.replace(/<Rotation>(-?\d+(?:\.\d+)?)<\/Rotation>/g,
-      (_,n)=> `<Rotation>${fmt((parseFloat(n)+deg)%360)}</Rotation>`);
-    xml = xml.replace(/<Rotate>(-?\d+(?:\.\d+)?)<\/Rotate>/g,
-      (_,n)=> `<Rotate>${fmt((parseFloat(n)+deg)%360)}</Rotate>`);
+    xml = xml.replace(/<Rotation>(-?\d+(?:\.\d+)?)<\/Rotation>/g, (_,n)=> `<Rotation>${fmt((parseFloat(n)+deg)%360)}</Rotation>`);
+    xml = xml.replace(/<Rotate>(-?\d+(?:\.\d+)?)<\/Rotate>/g,     (_,n)=> `<Rotate>${fmt((parseFloat(n)+deg)%360)}</Rotate>`);
   }
-  // Lijndiktevelden buiten Raw
-  xml = xml.replace(/<(LineWidth|BorderWidth)>(\d+(?:\.\d+)?)<\/\1>/g,
-    (_,k,v)=> `<${k}>${fmt(parseFloat(v)*scale)}</${k}>`);
-
-  // (optioneel) meetschaal/callibratie – voorzichtig: we laten <Measurement> inhoud verder ongemoeid
+  xml = xml.replace(/<(LineWidth|BorderWidth)>(\d+(?:\.\d+)?)<\/\1>/g, (_,k,v)=> `<${k}>${fmt(parseFloat(v)*scale)}</${k}>`);
+  xml = xml.replace(/<(Scale|ScaleX|ScaleY)>(\d+(?:\.\d+)?)<\/\1>/g,   (_,k,v)=> `<${k}>${fmt(parseFloat(v)*scale)}</${k}>`);
   return xml;
 }
-
 function transformBax(xmlText, scale, deg, fixDims){
-  // 1) Raw-blokken
   let out = xmlText.replace(/<Raw>([\s\S]*?)<\/Raw>/g, (m, payload) => {
-    try{
-      const plain = decodeRaw(payload);
-      const mod = transformRaw(plain, scale, deg);
-      const reenc = encodeRaw(mod);
-      return `<Raw>${reenc}</Raw>`;
-    }catch(e){ console.warn('Raw parse fail', e); return m; }
+    try{ const plain = decodeRaw(payload); const mod = transformRaw(plain, scale, deg); const reenc = encodeRaw(mod); return `<Raw>${reenc}</Raw>`; }
+    catch(e){ console.warn('Raw parse fail', e); return m; }
   });
-  // 2) XML-niveau tweaks
   if (fixDims) out = applyXmlTweaks(out, scale, deg);
   return out;
 }
-
-/* helpers */
+/* utils + downloads */
 function hexToBytes(hex){ const len = hex.length/2, out = new Uint8Array(len); for (let i=0;i<len;i++) out[i]=parseInt(hex.substr(i*2,2),16); return out; }
 function bytesToHex(u8){ return Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join(''); }
 function b64ToUint8(b64){ const bin = atob(b64.replace(/\s+/g,'')); const out = new Uint8Array(bin.length); for (let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i); return out; }
-function download(text, name){ const blob = new Blob([text], {type:'application/octet-stream'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500); }
+function download(text, name){ const blob = new Blob([text], {type:'application/octet-stream'}); downloadBlob(blob, name); }
+function downloadBlob(blob, name){ const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove();},500); }
 </script>
 </body>
 </html>
-
-
