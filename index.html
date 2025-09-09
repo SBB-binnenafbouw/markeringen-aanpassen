@@ -1,0 +1,321 @@
+<!doctype html>
+<html lang="nl">
+<head>
+  <meta charset="utf-8" />
+  <title>BAX Scale & Rotate (client-side)</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <!-- Pako voor zlib inflate/deflate -->
+  <script src="https://cdn.jsdelivr.net/npm/pako@2.1.0/dist/pako.min.js"></script>
+  <style>
+    :root { --bg:#0b0c0f; --card:#16181d; --fg:#e6e7eb; --muted:#9aa1aa; --acc:#74c0fc; }
+    body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.5 system-ui,Segoe UI,Roboto,Arial}
+    .wrap{max-width:920px;margin:40px auto;padding:0 16px}
+    .card{background:var(--card);border:1px solid #22262e;border-radius:14px;padding:18px 18px}
+    h1{margin:0 0 12px;font-size:20px}
+    label{display:block;margin:10px 0 6px;color:var(--muted)}
+    input[type="number"],select{width:100%;padding:10px;border-radius:10px;border:1px solid #2a2f37;background:#0f1116;color:var(--fg)}
+    .row{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .btn{display:inline-block;background:var(--acc);color:#0a0a0a;border:0;border-radius:10px;padding:10px 14px;font-weight:600;cursor:pointer}
+    .btn[disabled]{opacity:.5;cursor:not-allowed}
+    .muted{color:var(--muted);font-size:13px}
+    .drop{border:2px dashed #2a2f37;border-radius:14px;padding:22px;text-align:center;background:#0f1116}
+    .ok{color:#7cf48d}
+    .warn{color:#ffd166}
+    .err{color:#ff6b6b}
+    .sp{height:8px}
+    code{background:#0f1116;padding:2px 6px;border-radius:6px}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="card">
+      <h1>BAX Scale & Rotate (client-side)</h1>
+      <div class="drop" id="drop">
+        <div><strong>Sleep je .bax hierheen</strong> of klik om te kiezen</div>
+        <div class="muted">Bestand blijft lokaal in je browser</div>
+        <input type="file" id="file" accept=".bax" style="display:none">
+      </div>
+
+      <div class="sp"></div>
+
+      <div class="row">
+        <div>
+          <label>Schaal (kies 1 van 2)</label>
+          <select id="scaleMode">
+            <option value="pct">Percentage</option>
+            <option value="fromto">Van schaal → Naar schaal</option>
+          </select>
+        </div>
+        <div id="pctBox">
+          <label>Percentage</label>
+          <input type="number" id="pct" step="0.1" value="200" min="0.1">
+        </div>
+        <div id="fromBox" style="display:none">
+          <label>Van (bijv. 100 voor 1:100)</label>
+          <input type="number" id="fromScale" step="0.1" value="100" min="0.1">
+        </div>
+        <div id="toBox" style="display:none">
+          <label>Naar (bijv. 50 voor 1:50)</label>
+          <input type="number" id="toScale" step="0.1" value="50" min="0.01">
+        </div>
+      </div>
+
+      <div class="sp"></div>
+
+      <div class="row">
+        <div>
+          <label>Rotatie (graden)</label>
+          <input type="number" id="deg" step="1" value="0">
+        </div>
+        <div>
+          <label>Richting</label>
+          <select id="dir">
+            <option value="ccw">Tegen de klok in</option>
+            <option value="cw">Met de klok mee</option>
+          </select>
+        </div>
+      </div>
+
+      <div class="sp"></div>
+
+      <label><input type="checkbox" id="fixDims" checked> Lengtemetingen forceren (Rotation buiten Raw aanpassen)</label>
+      <div class="muted">Zet dit aan als afstand-/lengte-metingen niet mee roteren.</div>
+
+      <div class="sp"></div>
+
+      <button class="btn" id="runBtn" disabled>Verwerk & download .bax</button>
+      <span id="status" class="muted"></span>
+    </div>
+
+    <div class="sp"></div>
+    <div class="card">
+      <div class="muted">
+        Tip: 1:100 → 1:50 = <code>200%</code>. Alles gebeurt lokaal in je browser. Gebruiksvriendelijk op GitHub Pages.
+      </div>
+    </div>
+  </div>
+
+<script>
+const $ = sel => document.querySelector(sel);
+
+const drop = $('#drop'), file = $('#file'), runBtn = $('#runBtn'), statusEl = $('#status');
+let fileText = null, fileName = null;
+
+drop.addEventListener('click', () => file.click());
+drop.addEventListener('dragover', e => { e.preventDefault(); drop.style.background='#0b1017'; });
+drop.addEventListener('dragleave', e => { drop.style.background='#0f1116'; });
+drop.addEventListener('drop', e => {
+  e.preventDefault(); drop.style.background='#0f1116';
+  if (e.dataTransfer.files && e.dataTransfer.files[0]) handleFile(e.dataTransfer.files[0]);
+});
+file.addEventListener('change', e => { if (file.files[0]) handleFile(file.files[0]); });
+
+function handleFile(f){
+  const reader = new FileReader();
+  reader.onload = () => {
+    fileText = reader.result;
+    fileName = f.name.replace(/\.bax$/i,'') || 'annotations';
+    runBtn.disabled = false;
+    status('Bestand geladen.', 'ok');
+  };
+  reader.onerror = () => status('Lezen mislukt.', 'err');
+  reader.readAsText(f);
+}
+
+$('#scaleMode').addEventListener('change', e => {
+  const mode = e.target.value;
+  $('#pctBox').style.display = mode==='pct'?'block':'none';
+  $('#fromBox').style.display = mode==='fromto'?'block':'none';
+  $('#toBox').style.display = mode==='fromto'?'block':'none';
+});
+
+runBtn.addEventListener('click', async () => {
+  try {
+    if (!fileText) return;
+    const scale = computeScale();
+    const degInput = parseFloat($('#deg').value || '0');
+    const dir = $('#dir').value; // ccw/cw
+    const deg = dir === 'cw' ? -degInput : degInput;
+    const fixDims = $('#fixDims').checked;
+
+    status('Bezig met verwerken…', 'muted');
+    const out = transformBax(fileText, scale, deg, fixDims);
+    download(out, `${fileName}_scaled_rotated.bax`);
+    status('Klaar. Bestand gedownload.', 'ok');
+  } catch (err) {
+    console.error(err);
+    status('Fout bij verwerken: ' + (err?.message || err), 'err');
+  }
+});
+
+function computeScale(){
+  const mode = $('#scaleMode').value;
+  if (mode==='pct'){
+    const pct = parseFloat($('#pct').value || '100');
+    if (!isFinite(pct) || pct <= 0) throw new Error('Ongeldig percentage');
+    return pct/100;
+  } else {
+    const from = parseFloat($('#fromScale').value || '100');
+    const to = parseFloat($('#toScale').value || '50');
+    if (!isFinite(from) || !isFinite(to) || from<=0 || to<=0) throw new Error('Ongeldige schaalwaarden');
+    return from / to;
+  }
+}
+
+function status(msg, cls){
+  statusEl.textContent = msg;
+  statusEl.className = cls || 'muted';
+}
+
+function fmt(n){
+  // compacte precisie
+  return parseFloat(n.toFixed(4)).toString();
+}
+
+function transformArrayPairs(txt, scale, ca, sa){
+  const nums = txt.match(/-?\d+(?:\.\d+)?/g);
+  if (!nums || nums.length<2 || nums.length%2!==0) return txt;
+  const out=[];
+  for (let i=0;i<nums.length;i+=2){
+    const x = parseFloat(nums[i]) * scale;
+    const y = parseFloat(nums[i+1]) * scale;
+    const xr = x*ca - y*sa;
+    const yr = x*sa + y*ca;
+    out.push(fmt(xr), fmt(yr));
+  }
+  return out.join(' ');
+}
+
+function transformRect(txt, scale, ca, sa){
+  const nums = txt.match(/-?\d+(?:\.\d+)?/g);
+  if (!nums || nums.length<4) return txt;
+  let x1 = parseFloat(nums[0])*scale, y1 = parseFloat(nums[1])*scale;
+  let x2 = parseFloat(nums[2])*scale, y2 = parseFloat(nums[3])*scale;
+  const x1r = x1*ca - y1*sa, y1r = x1*sa + y1*ca;
+  const x2r = x2*ca - y2*sa, y2r = x2*sa + y2*ca;
+  const xmin = Math.min(x1r,x2r), xmax = Math.max(x1r,x2r);
+  const ymin = Math.min(y1r,y2r), ymax = Math.max(y1r,y2r);
+  return [fmt(xmin), fmt(ymin), fmt(xmax), fmt(ymax)].join(' ');
+}
+
+function scalePtInStyle(s, scale){
+  // schaal alleen "12pt" etc.; laat kleuren zoals #RRGGBB met rust
+  return s.replace(/(\d+(?:\.\d+)?)pt\b/g, (_,n)=> `${fmt(parseFloat(n)*scale)}pt`);
+}
+
+function decodeRawPayload(payload){
+  // Raw staat als hex met zlib in jouw bestanden; fallback naar base64
+  const raw = payload.trim();
+  const isHex = /^[0-9a-fA-F\s]+$/.test(raw);
+  if (isHex){
+    const bytes = hexToBytes(raw.replace(/\s+/g,''));
+    return pako.inflate(bytes, {to: 'string'});
+  }
+  // base64
+  const b = b64ToUint8(raw);
+  try { return pako.inflate(b, {to:'string'}); }
+  catch { return new TextDecoder('latin1').decode(b); }
+}
+
+function encodeRawPayload(plain){
+  // Altijd zlib + hex terug (compatibel met wat we lazen)
+  const comp = pako.deflate(plain);
+  return bytesToHex(comp);
+}
+
+function transformRawBlock(plain, scale, deg){
+  const rad = deg * Math.PI/180;
+  const ca = Math.cos(rad), sa = Math.sin(rad);
+
+  let t = plain;
+
+  // 1) schaal CSS-achtige 'pt' waarden (font/line), kleurcodes (#xxxxxx) blijven onaangeroerd
+  t = scalePtInStyle(t, scale);
+
+  // 2) arrays in PDF-like content binnen Raw
+  t = t.replace(/\/Rect\s*\[([^\]]+)\]/g, (_,g1)=> `/Rect [${transformRect(g1, scale, ca, sa)}]`);
+  t = t.replace(/\/Vertices\s*\[([^\]]+)\]/g, (_,g1)=> `/Vertices [${transformArrayPairs(g1, scale, ca, sa)}]`);
+  t = t.replace(/\/QuadPoints\s*\[([^\]]+)\]/g, (_,g1)=> `/QuadPoints [${transformArrayPairs(g1, scale, ca, sa)}]`);
+  t = t.replace(/\/BBox\s*\[([^\]]+)\]/g, (_,g1)=> `/BBox [${transformRect(g1, scale, ca, sa)}]`);
+
+  return t;
+}
+
+function applyXmlLevelTweaks(xml, scale, deg){
+  // Sommige lengtemetingen gebruiken Rotation buiten Raw
+  // Verhoog algemene Rotation/Rotate waarde bij <Annotation> nodes
+  if (deg && Math.abs(deg) > 0.0001){
+    xml = xml.replace(/<Rotation>(-?\d+(?:\.\d+)?)<\/Rotation>/g,
+      (_,n)=> `<Rotation>${fmt((parseFloat(n)+deg)%360)}</Rotation>`);
+    xml = xml.replace(/<Rotate>(-?\d+(?:\.\d+)?)<\/Rotate>/g,
+      (_,n)=> `<Rotate>${fmt((parseFloat(n)+deg)%360)}</Rotate>`);
+  }
+
+  // Schaal ook fonts/line breedtes die buiten Raw kunnen staan
+  xml = xml.replace(/<(FontSize|TextSize|LineWidth|BorderWidth)>(\d+(?:\.\d+)?)<\/\1>/g,
+    (_,key,val)=> `<${key}>${fmt(parseFloat(val)*scale)}</${key}>`);
+
+  // Sommige meetannotaties hebben Bounds/Rect op XML-niveau (zeldzaam); schaal ze
+  xml = xml.replace(/<(Rect|Bounds)>([^<]+)<\/\1>/g, (_,tag,vals)=>{
+    const nums = (vals.match(/-?\d+(?:\.\d+)?/g)||[]).map(parseFloat);
+    if (nums.length>=4){
+      for (let i=0;i<4;i++) nums[i]=nums[i]*scale;
+      return `<${tag}>${nums.map(fmt).join(',')}</${tag}>`;
+    }
+    return `<${tag}>${vals}</${tag}>`;
+  });
+
+  // ⚠️ We laten kleuren/labels met rust
+  return xml;
+}
+
+function transformBax(xmlText, scale, deg, fixDims){
+  // 1) Pas alle <Raw>...</Raw> blokken aan
+  let changed = 0;
+  const out = xmlText.replace(/<Raw>([\s\S]*?)<\/Raw>/g, (m, payload) => {
+    try{
+      const plain = decodeRawPayload(payload);
+      const mod = transformRawBlock(plain, scale, deg);
+      const reenc = encodeRawPayload(mod);
+      changed++;
+      return `<Raw>${reenc}</Raw>`;
+    }catch(e){
+      console.warn('Raw parse fail', e);
+      return m; // laat staan als het niet lukt
+    }
+  });
+
+  // 2) Optioneel dimensies forceren (rotation etc. buiten Raw)
+  const finalText = fixDims ? applyXmlLevelTweaks(out, scale, deg) : out;
+
+  if (changed===0) console.warn('Geen Raw-blokken aangepast (bestand kan een ander formaat hebben).');
+  return finalText;
+}
+
+/* helpers */
+function hexToBytes(hex){
+  const len = hex.length/2, out = new Uint8Array(len);
+  for (let i=0;i<len;i++) out[i]=parseInt(hex.substr(i*2,2),16);
+  return out;
+}
+function bytesToHex(u8){
+  return Array.from(u8).map(b=>b.toString(16).padStart(2,'0')).join('');
+}
+function b64ToUint8(b64){
+  const bin = atob(b64.replace(/\s+/g,''));
+  const out = new Uint8Array(bin.length);
+  for (let i=0;i<bin.length;i++) out[i]=bin.charCodeAt(i);
+  return out;
+}
+function download(text, name){
+  const blob = new Blob([text], {type:'application/octet-stream'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  setTimeout(()=>{ URL.revokeObjectURL(a.href); a.remove(); }, 500);
+}
+</script>
+</body>
+</html>
